@@ -28,21 +28,40 @@ class SliderItem : Parcelable {
     val orientation: Int
     private val metaData: Map<MetaDataType, MetaDataProvider>
     val thumbnailUrl: String?
+    var isFavorite: Boolean
 
     constructor(id: String, url: String?, type: SliderItemType,
                 orientation: Int,
-                metaDataProviders: Map<MetaDataType, MetaDataProvider>, thumbnailUrl: String?) {
+                metaDataProviders: Map<MetaDataType, MetaDataProvider>,
+                thumbnailUrl: String?,
+                isFavorite: Boolean = false) {
         this.id = id
         this.url = url
         this.type = type
         this.orientation = orientation
         this.metaData = metaDataProviders
         this.thumbnailUrl = thumbnailUrl
+        this.isFavorite = isFavorite
     }
+
+    constructor(id: String,
+                url: String?,
+                type: SliderItemType,
+                metaData: Map<MetaDataType, String?>,
+                thumbnailUrl: String?,
+                isFavorite: Boolean = false) : this(
+        id,
+        url,
+        type,
+        1,
+        metaData.mapValues { (_, value) -> StaticMetaDataProvider(value) },
+        thumbnailUrl,
+        isFavorite
+    )
 
     private constructor(`in`: Parcel) {
         id = `in`.readString()!!
-        url = `in`.readString()!!
+        url = `in`.readString()
         type = SliderItemType.valueOf(`in`.readString()!!)
         orientation = `in`.readInt()
         val metaDataSize = `in`.readInt()
@@ -53,7 +72,8 @@ class SliderItem : Parcelable {
             metaDataMap[key] = provider
         }
         metaData = metaDataMap
-        thumbnailUrl = `in`.readString()!!
+        thumbnailUrl = `in`.readString()
+        isFavorite = `in`.readByte().toInt() != 0
     }
 
     suspend fun get(metaDataType: MetaDataType): String? {
@@ -73,6 +93,7 @@ class SliderItem : Parcelable {
             dest.writeParcelable(provider, flags)
         }
         dest.writeString(thumbnailUrl)
+        dest.writeByte((if (isFavorite) 1 else 0).toByte())
     }
 
     override fun equals(other: Any?): Boolean {

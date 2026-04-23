@@ -15,6 +15,7 @@ import android.view.View
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.Toast
@@ -55,6 +56,7 @@ import java.lang.reflect.Field
 class MediaSliderView(context: Context) : ConstraintLayout(context) {
     // view elements
     private var playButton: View
+    private var favoriteIndicator: ImageView
     private var mainHandler: Handler
     private var mPager: ViewPager
     private val volumeReceiver = object : BroadcastReceiver() {
@@ -85,11 +87,15 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
     private val ioScope = CoroutineScope(Job() + Dispatchers.IO)
     private val transformResults = mutableMapOf<Int, String>()
     private var currentToast: Toast? = null
+    private var longPressHandled = false
+    var onLongPressCenterListener: (() -> Unit)? = null
+    var onAssetFavoriteChanged: ((SliderItemViewHolder, Boolean) -> Unit)? = null
 
     init {
         inflate(getContext(), R.layout.slider, this)
 
         playButton = findViewById(R.id.playPause)
+        favoriteIndicator = findViewById(R.id.favorite_indicator)
         playButton.setOnClickListener { toggleSlideshow(true) }
         mPager = findViewById(R.id.pager)
         mainHandler = Handler(Looper.getMainLooper())
@@ -111,6 +117,17 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
         if (mPager.adapter == null) {
             return super.dispatchKeyEvent(event)
         }
+
+        if (isCenterKey(event.keyCode)) {
+            if (event.action == KeyEvent.ACTION_UP) {
+                longPressHandled = false
+            } else if (event.action == KeyEvent.ACTION_DOWN && event.isLongPress && !longPressHandled) {
+                longPressHandled = true
+                onLongPressCenterListener?.invoke() ?: return super.dispatchKeyEvent(event)
+                return true
+            }
+        }
+
         val itemType = currentItemType()
         if (event.action == KeyEvent.ACTION_DOWN) {
             if (context is MediaSliderListener && (context as MediaSliderListener).onButtonPressed(event)) {
@@ -164,6 +181,10 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
             }
         }
         return if (itemType == SliderItemType.IMAGE) false else super.dispatchKeyEvent(event)
+    }
+
+    private fun isCenterKey(keyCode: Int): Boolean {
+        return keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER
     }
 
     private fun goToPreviousAsset() {
@@ -310,6 +331,7 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
 
         mPager.setAdapter(pagerAdapter)
         setStartPosition()
+        updateFavoriteIcon()
         mPager.addOnPageChangeListener(object : ViewPager.OnPageChangeListener {
             override fun onPageScrolled(sliderItemIndex: Int, v: Float, i1: Int) {
                 if (config.loadMore != null && mPager.currentItem > config.items.size - 10 && !loading) {
@@ -394,6 +416,7 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
             override fun onPageSelected(i: Int) {
                 metaDataRightAdapter.notifyDataSetChanged()
                 metaDataLeftAdapter.notifyDataSetChanged()
+                updateFavoriteIcon()
             }
 
             override fun onPageScrollStateChanged(i: Int) {
@@ -460,13 +483,27 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
         }
         config.items = items
         pagerAdapter!!.setItems(items)
+        updateFavoriteIcon()
         if (slideShowPlaying && currentItemType() == SliderItemType.IMAGE) {
             startTimerNextAsset()
         }
     }
 
     private fun currentItem(): SliderItemViewHolder = config.items[mPager.currentItem]
+    private fun currentItemOrNull(): SliderItemViewHolder? = if (::config.isInitialized) config.items.getOrNull(mPager.currentItem) else null
     private fun currentItemType(): SliderItemType = config.items[mPager.currentItem].type
+
+    fun getCurrentIndex(): Int {
+        return if (mPager.adapter == null) 0 else mPager.currentItem
+    }
+
+    fun updateFavoriteIcon() {
+        val currentItem = currentItemOrNull()
+        val shouldShow = currentItem?.let {
+            it.mainItem.isFavorite || (it.secondaryItem?.isFavorite == true)
+        } == true
+        favoriteIndicator.visibility = if (shouldShow) VISIBLE else GONE
+    }
 
     @OptIn(UnstableApi::class)
     fun isControllerVisible(): Boolean {

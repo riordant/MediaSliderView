@@ -88,8 +88,17 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
     private val transformResults = mutableMapOf<Int, String>()
     private var currentToast: Toast? = null
     private var longPressHandled = false
+    private var currentVideoAssetId: String? = null
+    private var lastSavedPlaybackPositionSeconds: Int? = null
+    private var playbackSaveRunnable: Runnable? = null
+    private var seekSaveRunnable: Runnable? = null
+    private var resumeLoadToken = 0
+    private var consumeNextVideoControlsUpKeyUp = false
     var onLongPressCenterListener: (() -> Unit)? = null
     var onAssetFavoriteChanged: ((SliderItemViewHolder, Boolean) -> Unit)? = null
+    var onSliderItemSelected: ((SliderItemViewHolder) -> Unit)? = null
+    var getVideoPlaybackPositionSeconds: (suspend (String) -> Int?)? = null
+    var onVideoPlaybackPositionChanged: ((String, Int) -> Unit)? = null
 
     init {
         inflate(getContext(), R.layout.slider, this)
@@ -118,6 +127,15 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
             return super.dispatchKeyEvent(event)
         }
 
+        if (
+            consumeNextVideoControlsUpKeyUp &&
+            event.action == KeyEvent.ACTION_UP &&
+            event.keyCode == KeyEvent.KEYCODE_DPAD_UP
+        ) {
+            consumeNextVideoControlsUpKeyUp = false
+            return true
+        }
+
         if (isCenterKey(event.keyCode)) {
             if (event.action == KeyEvent.ACTION_UP) {
                 longPressHandled = false
@@ -132,6 +150,8 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
         if (event.action == KeyEvent.ACTION_DOWN) {
             if (context is MediaSliderListener && (context as MediaSliderListener).onButtonPressed(event)) {
                 return false
+            } else if (handleVideoDpadSeekControls(event.keyCode, itemType)) {
+                return true
             } else if ((event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER || event.keyCode == KeyEvent.KEYCODE_MEDIA_PLAY || event.keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)) {
                 if (itemType == SliderItemType.IMAGE) {
                     toggleSlideshow(true)
@@ -183,6 +203,114 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
         return if (itemType == SliderItemType.IMAGE) false else super.dispatchKeyEvent(event)
     }
 
+    private fun handleVideoDpadSeekControls(keyCode: Int, itemType: SliderItemType): Boolean {
+        if (!config.useVideoDpadSeekControls || itemType != SliderItemType.VIDEO || currentPlayerView == null) {
+            return false
+        }
+
+        val playerView = currentPlayerView ?: return false
+        val player = currentPlayerInScope ?: return false
+
+        if (playerView.isControllerFullyVisible) {
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP && isFocusedOnVideoControlButton(playerView)) {
+                playerView.hideController()
+                playerView.requestFocus()
+                consumeNextVideoControlsUpKeyUp = true
+                return true
+            }
+
+            if (isFocusedOnVideoControlEdge(playerView, keyCode)) {
+                return true
+            }
+
+            return false
+        }
+
+        return when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_LEFT -> {
+                seekCurrentVideoBy(-VIDEO_DPAD_SEEK_MS)
+                showVideoControls(focusPlayPauseButton = false)
+                true
+            }
+
+            KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                seekCurrentVideoBy(VIDEO_DPAD_SEEK_MS)
+                showVideoControls(focusPlayPauseButton = false)
+                true
+            }
+
+            KeyEvent.KEYCODE_DPAD_DOWN -> {
+                showVideoControls(focusPlayPauseButton = true)
+                true
+            }
+
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_MEDIA_PLAY,
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                if (player.isPlaying) {
+                    player.pause()
+                } else {
+                    if (player.playbackState == Player.STATE_ENDED) {
+                        player.seekTo(0)
+                    }
+                    player.play()
+                }
+                showVideoControls(focusPlayPauseButton = true)
+                true
+            }
+
+            else -> false
+        }
+    }
+
+    private fun showVideoControls(focusPlayPauseButton: Boolean) {
+        val playerView = currentPlayerView ?: return
+        playerView.useController = true
+        playerView.showController()
+        playerView.post {
+            val focusView = if (focusPlayPauseButton) {
+                playerView.findViewById<View>(R.id.exo_pause)
+            } else {
+                playerView.findViewById<View>(R.id.exo_progress_layout)
+            }
+
+            focusView?.requestFocus()
+            focusView?.invalidate()
+        }
+    }
+
+    private fun isFocusedOnVideoControlButton(playerView: PlayerView): Boolean {
+        val focusedId = playerView.findFocus()?.id ?: return false
+        return focusedId == R.id.exo_mute ||
+                focusedId == R.id.exo_rewind ||
+                focusedId == R.id.exo_restart ||
+                focusedId == R.id.exo_pause ||
+                focusedId == R.id.exo_forward ||
+                focusedId == R.id.exo_slideshow
+    }
+
+    private fun isFocusedOnVideoControlEdge(playerView: PlayerView, keyCode: Int): Boolean {
+        val focusedId = playerView.findFocus()?.id ?: return false
+        return (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && focusedId == R.id.exo_mute) ||
+                (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && focusedId == R.id.exo_restart)
+    }
+
+    private fun seekCurrentVideoBy(deltaMs: Long) {
+        val player = currentPlayerInScope ?: return
+        val duration = player.duration.takeIf { it > 0 }
+        val target = (player.currentPosition + deltaMs).let { position ->
+            if (duration != null) {
+                position.coerceIn(0L, duration)
+            } else {
+                position.coerceAtLeast(0L)
+            }
+        }
+
+        player.seekTo(target)
+        scheduleSeekSettledSave()
+    }
+
     private fun isCenterKey(keyCode: Int): Boolean {
         return keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER
     }
@@ -217,8 +345,12 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
 
         val listener: ExoPlayerListener = object : ExoPlayerListener {
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_ENDED && slideShowPlaying) {
-                    goToNextAsset()
+                if (playbackState == Player.STATE_ENDED) {
+                    stopPlaybackSaveTimer()
+                    persistCurrentVideoPlaybackPosition(0)
+                    if (slideShowPlaying) {
+                        goToNextAsset()
+                    }
                 }
             }
 
@@ -229,10 +361,19 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
                 // Handle screen wake lock for video playback
                 if (currentItemType() == SliderItemType.VIDEO) {
                     if (isPlaying) {
+                        startPlaybackSaveTimer()
                         setKeepScreenOnFlags()
                     } else {
+                        stopPlaybackSaveTimer()
+                        persistCurrentVideoPlaybackPosition()
                         clearKeepScreenOnFlags()
                     }
+                }
+            }
+
+            override fun onPositionDiscontinuity(reason: Int) {
+                if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                    scheduleSeekSettledSave()
                 }
             }
 
@@ -242,6 +383,7 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
                 }
                 // Clear screen wake lock on error
                 if (currentItemType() == SliderItemType.VIDEO) {
+                    stopPlaybackSaveTimer()
                     clearKeepScreenOnFlags()
                 }
             }
@@ -292,6 +434,62 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
         mainHandler.postDelayed(goToNextAssetRunnable, (config.interval * 1000).toLong())
     }
 
+    private fun startPlaybackSaveTimer() {
+        stopPlaybackSaveTimer()
+        val runnable = object : Runnable {
+            override fun run() {
+                persistCurrentVideoPlaybackPosition()
+                playbackSaveRunnable = this
+                mainHandler.postDelayed(this, PLAYBACK_SAVE_INTERVAL_MS)
+            }
+        }
+        playbackSaveRunnable = runnable
+        mainHandler.postDelayed(runnable, PLAYBACK_SAVE_INTERVAL_MS)
+    }
+
+    private fun stopPlaybackSaveTimer() {
+        playbackSaveRunnable?.let { mainHandler.removeCallbacks(it) }
+        playbackSaveRunnable = null
+    }
+
+    private fun scheduleSeekSettledSave() {
+        seekSaveRunnable?.let { mainHandler.removeCallbacks(it) }
+        val runnable = Runnable {
+            seekSaveRunnable = null
+            persistCurrentVideoPlaybackPosition()
+        }
+        seekSaveRunnable = runnable
+        mainHandler.postDelayed(runnable, SEEK_SETTLED_SAVE_DELAY_MS)
+    }
+
+    private fun clearSeekSettledSave() {
+        seekSaveRunnable?.let { mainHandler.removeCallbacks(it) }
+        seekSaveRunnable = null
+    }
+
+    private fun resolvePlaybackPositionToPersist(player: ExoPlayer): Int? {
+        val currentPositionSeconds = (player.currentPosition / 1000).toInt()
+        val durationSeconds = player.duration.takeIf { it > 0 }?.let { (it / 1000).toInt() }
+
+        if (durationSeconds != null && durationSeconds - currentPositionSeconds <= PLAYBACK_COMPLETE_THRESHOLD_SECONDS) {
+            return 0
+        }
+
+        return currentPositionSeconds.takeIf { it > 0 }
+    }
+
+    private fun persistCurrentVideoPlaybackPosition(positionSeconds: Int? = currentPlayerInScope?.let { resolvePlaybackPositionToPersist(it) }) {
+        val assetId = currentVideoAssetId ?: return
+        val position = positionSeconds ?: return
+
+        if (position == lastSavedPlaybackPositionSeconds) {
+            return
+        }
+
+        lastSavedPlaybackPositionSeconds = position
+        onVideoPlaybackPositionChanged?.invoke(assetId, position)
+    }
+
     private fun goToNextAsset() {
         if (mPager.currentItem < mPager.adapter!!.count - 1) {
             mPager.setCurrentItem(mPager.currentItem + 1, config.enableSlideAnimation)
@@ -310,6 +508,7 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
             {
                 when (it) {
                     R.id.exo_rewind -> goToPreviousAsset()
+                    R.id.exo_restart -> restartCurrentVideo()
                     R.id.exo_forward -> goToNextAsset()
                     R.id.exo_slideshow -> toggleSlideshow(true)
                 }
@@ -356,6 +555,7 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
                     updateMetaData(metaDataRightAdapter, if (sliderItem.hasSecondaryItem()) sliderItem.secondaryItem!! else mainItem, sliderItemIndex)
 
                     config.onAssetSelected(sliderItem)
+                    onSliderItemSelected?.invoke(sliderItem)
                     currentToast?.cancel()
                     if (!sliderItem.hasSecondaryItem() && config.debugEnabled && transformResults.contains(sliderItemIndex)) {
                         currentToast = Toast.makeText(context, transformResults[sliderItemIndex], Toast.LENGTH_LONG)
@@ -376,15 +576,15 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
                         }
                         currentPlayerView = viewTag.getPlayerView()
                         currentPlayerInScope = viewTag.getPlayer()
-                        currentPlayerInScope!!.seekTo(0, 0)
+                        currentVideoAssetId = mainItem.id
                         if (currentPlayerInScope!!.playbackState == Player.STATE_IDLE && sliderItem.url != null) {
-                            prepareMedia(sliderItem.url!!,
-                                currentPlayerInScope!!, defaultExoFactory)
+                            prepareVideoWithResume(mainItem.id, sliderItem.url!!, currentPlayerInScope!!)
+                        } else {
+                            if (!config.isVideoSoundEnable) {
+                                currentPlayerView!!.player!!.volume = 0f
+                            }
+                            currentPlayerInScope!!.playWhenReady = true
                         }
-                        if (!config.isVideoSoundEnable) {
-                            currentPlayerView!!.player!!.volume = 0f
-                        }
-                        currentPlayerInScope!!.playWhenReady = true
                     } else {
                         if (config.isGradiantOverlayVisible) {
                             statusLayoutLeft.setBackgroundResource(R.drawable.gradient_overlay)
@@ -424,7 +624,60 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
         })
     }
 
+    private fun prepareVideoWithResume(assetId: String, mediaUrl: String, player: ExoPlayer) {
+        val token = ++resumeLoadToken
+        val playbackPositionProvider = getVideoPlaybackPositionSeconds
+
+        if (playbackPositionProvider == null) {
+            lastSavedPlaybackPositionSeconds = null
+            prepareMedia(mediaUrl, player, defaultExoFactory)
+            if (!config.isVideoSoundEnable) {
+                currentPlayerView?.player?.volume = 0f
+            }
+            player.playWhenReady = true
+            return
+        }
+
+        ioScope.launch {
+            val savedPositionSeconds = try {
+                playbackPositionProvider(assetId)
+            } catch (e: Exception) {
+                Timber.e(e, "Could not load saved playback position for $assetId")
+                null
+            }
+
+            withContext(Dispatchers.Main) {
+                if (token != resumeLoadToken || currentVideoAssetId != assetId || currentPlayerInScope != player) {
+                    return@withContext
+                }
+
+                val startPositionMs = savedPositionSeconds
+                    ?.takeIf { it > 0 }
+                    ?.toLong()
+                    ?.times(1000L) ?: 0L
+
+                lastSavedPlaybackPositionSeconds = savedPositionSeconds
+                prepareMedia(mediaUrl, player, defaultExoFactory, startPositionMs)
+                if (!config.isVideoSoundEnable) {
+                    currentPlayerView?.player?.volume = 0f
+                }
+                player.playWhenReady = true
+            }
+        }
+    }
+
+    private fun restartCurrentVideo() {
+        val player = currentPlayerInScope ?: return
+        player.seekTo(0)
+        player.play()
+        persistCurrentVideoPlaybackPosition(0)
+        scheduleSeekSettledSave()
+    }
+
     fun onDestroy() {
+        persistCurrentVideoPlaybackPosition()
+        stopPlaybackSaveTimer()
+        clearSeekSettledSave()
         if (currentPlayerInScope != null) {
             currentPlayerInScope!!.release()
         }
@@ -451,6 +704,11 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
     }
 
     private fun stopPlayer() {
+        persistCurrentVideoPlaybackPosition()
+        stopPlaybackSaveTimer()
+        clearSeekSettledSave()
+        resumeLoadToken += 1
+
         if (currentPlayerInScope != null && (currentPlayerInScope!!.isPlaying || currentPlayerInScope!!.isLoading)) {
             currentPlayerInScope!!.stop()
         }
@@ -458,6 +716,8 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
         if (currentItemType() == SliderItemType.VIDEO) {
             clearKeepScreenOnFlags()
         }
+        currentVideoAssetId = null
+        lastSavedPlaybackPositionSeconds = null
     }
 
     fun setDefaultExoFactory(defaultExoFactory: DefaultHttpDataSource.Factory) {
@@ -511,12 +771,22 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
     }
 
     companion object {
+        private const val PLAYBACK_SAVE_INTERVAL_MS = 5000L
+        private const val SEEK_SETTLED_SAVE_DELAY_MS = 500L
+        private const val PLAYBACK_COMPLETE_THRESHOLD_SECONDS = 5
+        private const val VIDEO_DPAD_SEEK_MS = 5000L
+
         @SuppressLint("UnsafeOptInUsageError")
-        fun prepareMedia(mediaUrl: String, player: ExoPlayer, factory: DefaultHttpDataSource.Factory) {
+        fun prepareMedia(
+            mediaUrl: String,
+            player: ExoPlayer,
+            factory: DefaultHttpDataSource.Factory,
+            startPositionMs: Long = 0L
+        ) {
             val mediaUri = Uri.parse(mediaUrl)
             val mediaItem = MediaItem.fromUri(mediaUri)
             val mediaSource = ProgressiveMediaSource.Factory(factory).createMediaSource(mediaItem)
-            player.setMediaSource(mediaSource, 0L)
+            player.setMediaSource(mediaSource, startPositionMs)
             player.prepare()
         }
     }

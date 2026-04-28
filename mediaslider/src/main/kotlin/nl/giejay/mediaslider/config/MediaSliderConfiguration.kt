@@ -24,6 +24,7 @@ class MediaSliderConfiguration : Parcelable {
     val metaDataConfig: List<MetaDataItem>
     private val gradiantOverlay: Boolean
     val enableSlideAnimation: Boolean
+    val useVideoDpadSeekControls: Boolean
 
     constructor(startPosition: Int,
                 interval: Int,
@@ -39,7 +40,8 @@ class MediaSliderConfiguration : Parcelable {
                 debugEnabled: Boolean,
                 gradiantOverlay: Boolean,
                 enableSlideAnimation: Boolean,
-                metaDataConfig: List<MetaDataItem>) {
+                metaDataConfig: List<MetaDataItem>,
+                useVideoDpadSeekControls: Boolean = false) {
         this.startPosition = startPosition
         this.interval = interval
         this.isOnlyUseThumbnails = onlyUseThumbnails
@@ -55,6 +57,7 @@ class MediaSliderConfiguration : Parcelable {
         this.debugEnabled = debugEnabled
         this.gradiantOverlay = gradiantOverlay
         this.enableSlideAnimation = enableSlideAnimation
+        this.useVideoDpadSeekControls = useVideoDpadSeekControls
     }
 
     private constructor(`in`: Parcel) {
@@ -69,6 +72,7 @@ class MediaSliderConfiguration : Parcelable {
         this.debugEnabled = `in`.readInt() == 1
         this.gradiantOverlay = `in`.readInt() == 1
         this.enableSlideAnimation = `in`.readInt() == 1
+        this.useVideoDpadSeekControls = `in`.readInt() == 1
         metaDataConfig = MetaDataConverter.metaDataListFromJson(`in`.readString()!!)
     }
 
@@ -103,6 +107,7 @@ class MediaSliderConfiguration : Parcelable {
         dest.writeInt(if (debugEnabled) 1 else 0)
         dest.writeInt(if (gradiantOverlay) 1 else 0)
         dest.writeInt(if (enableSlideAnimation) 1 else 0)
+        dest.writeInt(if (useVideoDpadSeekControls) 1 else 0)
         dest.writeString(MetaDataConverter.metaDataListToJson(metaDataConfig))
     }
 

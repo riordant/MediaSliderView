@@ -57,6 +57,15 @@
             android:nextFocusDown="@+id/exo_progress_placeholder" />
 
         <ImageButton
+            android:id="@+id/exo_restart"
+            android:src="@drawable/restart_icon"
+            style="@style/TVMediaButton"
+            android:visibility="gone"
+            android:nextFocusLeft="@+id/exo_pause"
+            android:nextFocusRight="@+id/exo_forward"
+            android:nextFocusDown="@+id/exo_progress_placeholder" />
+
+        <ImageButton
             android:id="@+id/exo_forward"
             android:src="@android:drawable/ic_media_next"
             style="@style/TVMediaButton"

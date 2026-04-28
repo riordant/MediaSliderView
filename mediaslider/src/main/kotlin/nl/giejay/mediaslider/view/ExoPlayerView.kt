@@ -3,6 +3,7 @@ package nl.giejay.mediaslider.view
 import android.content.Context
 import android.util.AttributeSet
 import android.view.LayoutInflater
+import android.view.View
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import androidx.annotation.OptIn
@@ -21,6 +22,7 @@ class ExoPlayerView @JvmOverloads constructor(context: Context, resourceId: Int,
     private val muteBtn: ImageButton
     private val forwardBtn: ImageButton
     private val rewindBtn: ImageButton
+    private val restartBtn: ImageButton
     private val slideshowBtn: ImageButton
     private var player: ExoPlayer? = null
 
@@ -31,6 +33,7 @@ class ExoPlayerView @JvmOverloads constructor(context: Context, resourceId: Int,
         muteBtn = playerView.findViewById(R.id.exo_mute)
         forwardBtn = playerView.findViewById(R.id.exo_forward)
         rewindBtn = playerView.findViewById(R.id.exo_rewind)
+        restartBtn = playerView.findViewById(R.id.exo_restart)
         slideshowBtn = playerView.findViewById(R.id.exo_slideshow)
     }
 
@@ -50,6 +53,7 @@ class ExoPlayerView @JvmOverloads constructor(context: Context, resourceId: Int,
             ).build()
         playerView.player = player
         if (!config.isVideoSoundEnable) player?.volume = 0f
+        configureControlsForMode(config)
 
         playBtn.setOnClickListener {
             onButtonClick(R.id.exo_pause)
@@ -76,6 +80,7 @@ class ExoPlayerView @JvmOverloads constructor(context: Context, resourceId: Int,
         }
         forwardBtn.setOnClickListener { onButtonClick(R.id.exo_forward) }
         rewindBtn.setOnClickListener { onButtonClick(R.id.exo_rewind) }
+        restartBtn.setOnClickListener { onButtonClick(R.id.exo_restart) }
         slideshowBtn.setOnClickListener { onButtonClick(R.id.exo_slideshow) }
         player?.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -84,6 +89,14 @@ class ExoPlayerView @JvmOverloads constructor(context: Context, resourceId: Int,
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 listener.onIsPlayingChanged(isPlaying)
+            }
+
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int
+            ) {
+                listener.onPositionDiscontinuity(reason)
             }
 
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
@@ -110,5 +123,27 @@ class ExoPlayerView @JvmOverloads constructor(context: Context, resourceId: Int,
 
     fun isReady(): Boolean {
         return player != null
+    }
+
+    private fun configureControlsForMode(config: MediaSliderConfiguration) {
+        if (!config.useVideoDpadSeekControls) {
+            restartBtn.visibility = View.GONE
+            rewindBtn.visibility = View.VISIBLE
+            forwardBtn.visibility = View.VISIBLE
+            slideshowBtn.visibility = View.VISIBLE
+            playBtn.nextFocusLeftId = R.id.exo_rewind
+            playBtn.nextFocusRightId = R.id.exo_forward
+            return
+        }
+
+        restartBtn.visibility = View.VISIBLE
+        rewindBtn.visibility = View.GONE
+        forwardBtn.visibility = View.GONE
+        slideshowBtn.visibility = View.GONE
+        playBtn.nextFocusLeftId = R.id.exo_mute
+        playBtn.nextFocusRightId = R.id.exo_restart
+        muteBtn.nextFocusRightId = R.id.exo_pause
+        restartBtn.nextFocusLeftId = R.id.exo_pause
+        restartBtn.nextFocusRightId = R.id.exo_pause
     }
 }

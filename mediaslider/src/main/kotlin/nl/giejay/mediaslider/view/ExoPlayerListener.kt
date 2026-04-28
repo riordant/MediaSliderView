@@ -6,5 +6,7 @@ interface ExoPlayerListener {
 
     fun onIsPlayingChanged(isPlaying: Boolean)
 
+    fun onPositionDiscontinuity(reason: Int) {}
+
     fun onPlayerError(error: androidx.media3.common.PlaybackException)
 }

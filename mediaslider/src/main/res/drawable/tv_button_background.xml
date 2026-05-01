@@ -3,7 +3,7 @@
     <!-- Focused state - much more vibrant -->
     <item android:state_focused="true">
         <shape android:shape="rectangle">
-            <solid android:color="#80FFFFFF" />
+            <solid android:color="#CC000000" />
             <stroke android:width="3dp" android:color="#FFFFFF" />
             <corners android:radius="6dp" />
         </shape>
@@ -11,7 +11,7 @@
     <!-- Pressed state -->
     <item android:state_pressed="true">
         <shape android:shape="rectangle">
-            <solid android:color="#99FFFFFF" />
+            <solid android:color="#E6000000" />
             <stroke android:width="3dp" android:color="#FFFFFF" />
             <corners android:radius="6dp" />
         </shape>
@@ -19,9 +19,8 @@
     <!-- Default state - slightly visible -->
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="#20FFFFFF" />
+            <solid android:color="#99000000" />
             <corners android:radius="6dp" />
         </shape>
     </item>
 </selector>
-

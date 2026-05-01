@@ -92,5 +92,30 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
-</androidx.constraintlayout.widget.ConstraintLayout>
+    <TextView
+        android:id="@+id/video_title_overlay"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="@dimen/video_playing_title_margin_start"
+        android:layout_marginTop="@dimen/video_playing_title_margin_top"
+        android:layout_marginEnd="@dimen/video_playing_title_margin_end"
+        android:alpha="0"
+        android:elevation="20dp"
+        android:ellipsize="end"
+        android:gravity="end"
+        android:includeFontPadding="false"
+        android:maxLines="2"
+        android:shadowColor="#CC000000"
+        android:shadowDx="0"
+        android:shadowDy="2"
+        android:shadowRadius="4"
+        android:textColor="@android:color/white"
+        android:textSize="@dimen/video_playing_title_text_size"
+        android:textStyle="bold"
+        android:visibility="gone"
+        app:layout_constraintEnd_toStartOf="@id/favorite_indicator"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_goneMarginEnd="@dimen/video_playing_title_margin_end" />
 
+</androidx.constraintlayout.widget.ConstraintLayout>

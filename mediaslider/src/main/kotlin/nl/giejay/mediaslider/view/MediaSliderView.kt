@@ -18,6 +18,7 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.TextView
 import android.widget.Toast
 import androidx.annotation.OptIn
 import androidx.constraintlayout.widget.ConstraintLayout
@@ -44,6 +45,7 @@ import nl.giejay.mediaslider.adapter.MetaDataClock
 import nl.giejay.mediaslider.adapter.MetaDataMediaCount
 import nl.giejay.mediaslider.adapter.ScreenSlidePagerAdapter
 import nl.giejay.mediaslider.config.MediaSliderConfiguration
+import nl.giejay.mediaslider.model.MetaDataType
 import nl.giejay.mediaslider.model.SliderItem
 import nl.giejay.mediaslider.model.SliderItemType
 import nl.giejay.mediaslider.model.SliderItemViewHolder
@@ -57,6 +59,7 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
     // view elements
     private var playButton: View
     private var favoriteIndicator: ImageView
+    private var videoTitleOverlay: TextView
     private var mainHandler: Handler
     private var mPager: ViewPager
     private val volumeReceiver = object : BroadcastReceiver() {
@@ -94,6 +97,9 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
     private var seekSaveRunnable: Runnable? = null
     private var resumeLoadToken = 0
     private var consumeNextVideoControlsUpKeyUp = false
+    private var videoTitleLoadToken = 0
+    private var videoControllerVisible = false
+    private var hideVideoControlsRunnable: Runnable? = null
     var onLongPressCenterListener: (() -> Unit)? = null
     var onAssetFavoriteChanged: ((SliderItemViewHolder, Boolean) -> Unit)? = null
     var onSliderItemSelected: ((SliderItemViewHolder) -> Unit)? = null
@@ -105,6 +111,7 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
 
         playButton = findViewById(R.id.playPause)
         favoriteIndicator = findViewById(R.id.favorite_indicator)
+        videoTitleOverlay = findViewById(R.id.video_title_overlay)
         playButton.setOnClickListener { toggleSlideshow(true) }
         mPager = findViewById(R.id.pager)
         mainHandler = Handler(Looper.getMainLooper())
@@ -148,6 +155,10 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
 
         val itemType = currentItemType()
         if (event.action == KeyEvent.ACTION_DOWN) {
+            if (itemType == SliderItemType.VIDEO && currentPlayerView?.isControllerFullyVisible == true) {
+                scheduleVideoControlsHide()
+            }
+
             if (context is MediaSliderListener && (context as MediaSliderListener).onButtonPressed(event)) {
                 return false
             } else if (handleVideoDpadSeekControls(event.keyCode, itemType)) {
@@ -162,6 +173,8 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
             } else if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN && itemType == SliderItemType.VIDEO && currentPlayerView != null) {
                 currentPlayerView!!.useController = true
                 currentPlayerView!!.showController()
+                showVideoTitleOverlayForCurrentVideo()
+                scheduleVideoControlsHide()
 
                 // Ensure proper focus to fix highlighting issue on first open
                 currentPlayerView!!.post {
@@ -174,6 +187,7 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
                 return super.dispatchKeyEvent(event)
             } else if (event.keyCode == KeyEvent.KEYCODE_BACK && itemType == SliderItemType.VIDEO && currentPlayerView != null && currentPlayerView!!.isControllerFullyVisible) {
                 currentPlayerView!!.hideController()
+                hideVideoTitleOverlay()
                 return true
             } else if (slideShowPlaying && itemType == SliderItemType.IMAGE) {
                 if (event.keyCode != KeyEvent.KEYCODE_DPAD_RIGHT) {
@@ -214,6 +228,7 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
         if (playerView.isControllerFullyVisible) {
             if (keyCode == KeyEvent.KEYCODE_DPAD_UP && isFocusedOnVideoControlButton(playerView)) {
                 playerView.hideController()
+                hideVideoTitleOverlay()
                 playerView.requestFocus()
                 consumeNextVideoControlsUpKeyUp = true
                 return true
@@ -268,6 +283,8 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
         val playerView = currentPlayerView ?: return
         playerView.useController = true
         playerView.showController()
+        showVideoTitleOverlayForCurrentVideo()
+        scheduleVideoControlsHide()
         playerView.post {
             val focusView = if (focusPlayPauseButton) {
                 playerView.findViewById<View>(R.id.exo_pause)
@@ -278,6 +295,105 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
             focusView?.requestFocus()
             focusView?.invalidate()
         }
+    }
+
+    private fun configureVideoTitleOverlay(playerView: PlayerView) {
+        playerView.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
+            if (visibility == VISIBLE) {
+                showVideoTitleOverlayForCurrentVideo()
+                scheduleVideoControlsHide()
+            } else {
+                cancelScheduledVideoControlsHide()
+                hideVideoTitleOverlay()
+            }
+        })
+    }
+
+    private fun scheduleVideoControlsHide() {
+        val playerView = currentPlayerView ?: return
+        cancelScheduledVideoControlsHide()
+        val runnable = Runnable {
+            hideVideoControlsRunnable = null
+            if (currentPlayerView === playerView && playerView.isControllerFullyVisible) {
+                playerView.hideController()
+            }
+            hideVideoTitleOverlay()
+        }
+        hideVideoControlsRunnable = runnable
+        mainHandler.postDelayed(runnable, VIDEO_CONTROL_VISIBLE_MS)
+    }
+
+    private fun cancelScheduledVideoControlsHide() {
+        hideVideoControlsRunnable?.let { mainHandler.removeCallbacks(it) }
+        hideVideoControlsRunnable = null
+    }
+
+    private fun showVideoTitleOverlayForCurrentVideo() {
+        val currentItem = currentItemOrNull()
+        if (currentItem?.type != SliderItemType.VIDEO) {
+            hideVideoTitleOverlay()
+            return
+        }
+
+        videoControllerVisible = true
+        val assetId = currentItem.mainItem.id
+        val token = ++videoTitleLoadToken
+
+        ioScope.launch {
+            val title = currentItem.mainItem.get(MetaDataType.DESCRIPTION)?.trim()
+            withContext(Dispatchers.Main) {
+                val stillCurrentVideo = currentItemOrNull()?.let {
+                    it.type == SliderItemType.VIDEO && it.mainItem.id == assetId
+                } == true
+
+                if (token != videoTitleLoadToken || !videoControllerVisible || !stillCurrentVideo) {
+                    return@withContext
+                }
+
+                if (title.isNullOrBlank()) {
+                    hideVideoTitleOverlay()
+                } else {
+                    fadeInVideoTitleOverlay(title)
+                }
+            }
+        }
+    }
+
+    private fun fadeInVideoTitleOverlay(title: String) {
+        videoTitleOverlay.animate().cancel()
+        videoTitleOverlay.text = title
+        if (videoTitleOverlay.visibility != VISIBLE) {
+            videoTitleOverlay.alpha = 0f
+            videoTitleOverlay.visibility = VISIBLE
+        }
+        videoTitleOverlay.animate()
+            .alpha(1f)
+            .setDuration(VIDEO_TITLE_FADE_DURATION_MS)
+            .start()
+    }
+
+    private fun hideVideoTitleOverlay() {
+        videoControllerVisible = false
+        videoTitleLoadToken += 1
+        videoTitleOverlay.animate().cancel()
+
+        if (videoTitleOverlay.visibility != VISIBLE) {
+            videoTitleOverlay.alpha = 0f
+            videoTitleOverlay.text = null
+            videoTitleOverlay.visibility = GONE
+            return
+        }
+
+        videoTitleOverlay.animate()
+            .alpha(0f)
+            .setDuration(VIDEO_TITLE_FADE_DURATION_MS)
+            .withEndAction {
+                if (!videoControllerVisible) {
+                    videoTitleOverlay.visibility = GONE
+                    videoTitleOverlay.text = null
+                }
+            }
+            .start()
     }
 
     private fun isFocusedOnVideoControlButton(playerView: PlayerView): Boolean {
@@ -575,8 +691,12 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
                             return
                         }
                         currentPlayerView = viewTag.getPlayerView()
+                        configureVideoTitleOverlay(currentPlayerView!!)
                         currentPlayerInScope = viewTag.getPlayer()
                         currentVideoAssetId = mainItem.id
+                        if (currentPlayerView!!.isControllerFullyVisible) {
+                            showVideoTitleOverlayForCurrentVideo()
+                        }
                         if (currentPlayerInScope!!.playbackState == Player.STATE_IDLE && sliderItem.url != null) {
                             prepareVideoWithResume(mainItem.id, sliderItem.url!!, currentPlayerInScope!!)
                         } else {
@@ -593,6 +713,7 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
                             startTimerNextAsset()
                         }
                         stopPlayer()
+                        hideVideoTitleOverlay()
                     }
                 }
             }
@@ -708,6 +829,8 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
         stopPlaybackSaveTimer()
         clearSeekSettledSave()
         resumeLoadToken += 1
+        cancelScheduledVideoControlsHide()
+        hideVideoTitleOverlay()
 
         if (currentPlayerInScope != null && (currentPlayerInScope!!.isPlaying || currentPlayerInScope!!.isLoading)) {
             currentPlayerInScope!!.stop()
@@ -775,6 +898,8 @@ class MediaSliderView(context: Context) : ConstraintLayout(context) {
         private const val SEEK_SETTLED_SAVE_DELAY_MS = 500L
         private const val PLAYBACK_COMPLETE_THRESHOLD_SECONDS = 5
         private const val VIDEO_DPAD_SEEK_MS = 5000L
+        private const val VIDEO_CONTROL_VISIBLE_MS = 5000L
+        private const val VIDEO_TITLE_FADE_DURATION_MS = 10L
 
         @SuppressLint("UnsafeOptInUsageError")
         fun prepareMedia(

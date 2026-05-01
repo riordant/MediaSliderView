@@ -52,6 +52,7 @@ class ExoPlayerView @JvmOverloads constructor(context: Context, resourceId: Int,
                 .build()
             ).build()
         playerView.player = player
+        playerView.controllerShowTimeoutMs = DISABLE_MEDIA3_AUTO_HIDE_MS
         if (!config.isVideoSoundEnable) player?.volume = 0f
         configureControlsForMode(config)
 
@@ -145,5 +146,9 @@ class ExoPlayerView @JvmOverloads constructor(context: Context, resourceId: Int,
         muteBtn.nextFocusRightId = R.id.exo_pause
         restartBtn.nextFocusLeftId = R.id.exo_pause
         restartBtn.nextFocusRightId = R.id.exo_pause
+    }
+
+    companion object {
+        private const val DISABLE_MEDIA3_AUTO_HIDE_MS = 0
     }
 }
